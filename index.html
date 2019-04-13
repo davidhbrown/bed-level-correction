@@ -1,0 +1,404 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <title>Bed Level Correction Calculator</title>
+    <style>
+        html {
+            background: #c63;
+            font-family: sans-serif;
+        }
+
+        body {
+            max-width: 40em;
+            margin: 0 auto;
+            padding: 0.25em 1em;
+            background: aliceblue;
+            color: #222e;
+        }
+
+        p {
+            line-height: 120%;
+        }
+
+        input:invalid {
+            border-color: darkred;
+        }
+
+        .warning {
+            color: darkred;
+        }
+
+        .unimportant {
+            font-size: 80%;
+            color: #555e;
+        }
+
+        input[type="text"] {
+            width: 6em;
+        }
+
+        #recommendations span {
+            font-family: monospace;
+            font-weight: bold;
+        }
+
+
+    </style>
+    <script>
+
+        var localStorageName;
+        var recommendedSettings;
+
+        function Settings(other) {
+            if (other === null || typeof other !== 'object') {
+                other = {};
+            }
+            this.when = other.when !== undefined ? other.when : Date.now();
+            this.firstLayer = other.firstLayer !== undefined ? other.firstLayer : 0.2;
+            this.z = other.z !== undefined ? other.z : -0.1;
+            this.left = other.left !== undefined ? other.left : 0;
+            this.right = other.right !== undefined ? other.right : 0;
+            this.front = other.front !== undefined ? other.front : 0;
+            this.rear = other.rear !== undefined ? other.rear : 0;
+            this.isValid = function () {
+                return this.firstLayer >= 0.01 && this.firstLayer <= 1.0
+                    && this.z > -10 && this.z <= 0
+                    && this.left == blcConstrain(this.left)
+                    && this.right == blcConstrain(this.right)
+                    && this.front == blcConstrain(this.front)
+                    && this.rear == blcConstrain(this.rear)
+            }
+            this.clean = function () {
+                this.z = roundLiveZ(Math.max(-9.999, Math.min(0, this.z)));
+                this.left = blcConstrain(this.left);
+                this.right = blcConstrain(this.right);
+                this.front = blcConstrain(this.front);
+                this.rear = blcConstrain(this.rear);
+            }
+        }
+
+        function blcConstrain(v) {
+            return Math.max(-50, Math.min(50, v));
+        }
+
+        function v(id, val) {
+            if (val === undefined) {
+                return parseFloat(document.getElementById(id).value);
+            } else {
+                document.getElementById(id).value = val;
+            }
+        }
+
+        function avg(ids) {
+            var sum = 0.0;
+            ids.forEach(function (id) {
+                sum += v(id)
+            });
+            return (sum / ids.length);
+        }
+
+        function readCurrentSettingsFromForm() {
+            s = new Settings();
+            s.firstLayer = v('layer');
+            s.z = v('s_z');
+            s.left = v('s_left');
+            s.right = v('s_right');
+            s.front = v('s_front');
+            s.rear = v('s_rear');
+            return s;
+        }
+
+        function readSettingsFromLocalStorage() {
+            if (localStorageName) {
+                var storedValue = window.localStorage.getItem(localStorageName);
+                if (storedValue) {
+                    var storedObject = JSON.parse(storedValue);
+                    return new Settings(storedObject);
+                }
+            }
+            return null;
+        }
+
+        function saveSettingsToLocalStorage(settings) {
+            if (!settings instanceof Settings) {
+                console.error('saveSettingsToLocalStorage parameter is not a Settings object');
+                return false;
+            }
+            if (localStorageName) {
+                try {
+                    var value = JSON.stringify(settings);
+                    window.localStorage.setItem(localStorageName, value);
+                    updateCurrentSettingsLoader();
+                    return window.localStorage.getItem(localStorageName) === value;
+                } catch (e) {
+                    alert('Problem with localStorage prevented saving: ' + e.message);
+                }
+            }
+            return false;
+        }
+
+        /**
+         * The Live-adjust Z values appear to be 1/400-mm-steps truncated to the nearest 0.001 mm.
+         * This function returns its input number "rounded" according to that scheme
+         * @param   {number} value original
+         * @returns {number} rounded
+         */
+        function roundLiveZ(value) {
+            return Math.trunc((Math.round(value * 400) / 400) * 1000) / 1000;
+        }
+
+        /**
+         * main handler
+         */
+        function calculate(evt) {
+            evt.preventDefault();
+            if (document.getElementById('form').checkValidity && !document.getElementById('form').checkValidity()) {
+                //supports validity API and form is not valid.
+                return false;
+            }
+            recommendedSettings = calculateRecommendedSettings();
+            showRecommendedSettings(recommendedSettings);
+            recommendedSettings.clean();
+            return false;//just in case some browser is still trying to submit the form
+        }
+
+        function calculateRecommendedSettings() {
+            var cs = readCurrentSettingsFromForm();
+            if (!cs.isValid()) {
+                alert("Caution: Settings appear to be invalid; at least one value is out-of-range. These recommendations may be unreliable.");
+            }
+            var rs = new Settings();
+            rs.firstLayer = cs.firstLayer;
+            var mid = avg(['p_lm', 'p_cm', 'p_rm']);
+            var ctr = avg(['p_cr', 'p_cm', 'p_cf']);
+            var left = avg(['p_lr', 'p_lm', 'p_lf']);
+            var right = avg(['p_rr', 'p_rm', 'p_rf']);
+            var front = avg(['p_lf', 'p_cf', 'p_rf']);
+            var rear = avg(['p_lr', 'p_cr', 'p_rr']);
+            var all = avg(['p_lr', 'p_cr', 'p_rr', 'p_lm', 'p_cm', 'p_rm', 'p_lf', 'p_cf', 'p_rf']);
+            rs.z = roundLiveZ(cs.firstLayer + cs.z - all);
+            rs.left = Math.round(cs.left - (left - ctr) * 1000);
+            rs.right = Math.round(cs.right - (right - ctr) * 1000);
+            rs.front = Math.round(cs.front - (front - mid) * 1000);
+            rs.rear = Math.round(cs.rear - (rear - mid) * 1000);
+            return rs;
+
+        }
+
+        function showRecommendedSettings(rs) {
+            var addWarning = function (blc) {
+                var blcc = blcConstrain(blc);
+                return blc == blcc ? blcc.toString() : blcc.toString() + ' <em class="warning">Warning: calculated value ' + blc.toString() + ' is out-of-range!</em>';
+            }
+            document.getElementById('r_z').innerHTML = rs.z.toString();
+            document.getElementById('r_left').innerHTML = addWarning(rs.left);
+            document.getElementById('r_right').innerHTML = addWarning(rs.right);
+            document.getElementById('r_front').innerHTML = addWarning(rs.front);
+            document.getElementById('r_rear').innerHTML = addWarning(rs.rear);
+            document.getElementById('recommendedSettingsInterface').innerHTML = '<button onclick="copyRecommendationToCurrentSettings()">Copy recommendation to current settings</button>' + (localStorageName ? ' <button = onclick="saveRecommendationToLocalStorage()">Save recommended settings to local storage</button>' : '');
+        }
+
+        function copyRecommendationToCurrentSettings() {
+            if (recommendedSettings instanceof Settings) {
+                loadCurrentSettings(recommendedSettings);
+            } else {
+                console.error('Tried to copy recommendation but recommendedSettings is not a Settings.');
+            }
+        }
+
+        function saveRecommendationToLocalStorage() {
+            if (recommendedSettings instanceof Settings) {
+                saveSettingsToLocalStorage(recommendedSettings);
+                updateCurrentSettingsLoader();
+            } else {
+                console.error('Tried to save recommendation but recommendedSettings is not a Settings.');
+            }
+        }
+
+        function loadCurrentSettings(cs) {
+            if (!(cs instanceof Settings)) {
+                console.error("Tried to loadCurrentSettings but parameter is not a settings");
+                return false;
+            }
+            if (!cs.isValid()) {
+                if (!window.confirm("Caution: Settings appear to be invalid: at least one value is out-of-range. Do you wish to load them anyway?")) {
+                    return false;
+                }
+            }
+            v('layer', cs.firstLayer);
+            v('s_z', cs.z);
+            v('s_left', cs.left);
+            v('s_right', cs.right);
+            v('s_front', cs.front);
+            v('s_rear', cs.rear);
+            return true;
+        }
+
+        function removeLocalStorage() {
+            if (localStorageName) {
+                window.localStorage.removeItem(localStorageName);
+                updateCurrentSettingsLoader();
+            }
+        }
+
+        function updateCurrentSettingsLoader() {
+            var savedSettings = readSettingsFromLocalStorage();
+            if (savedSettings instanceof Settings) {
+                var when = new Date(savedSettings.when);
+                document.getElementById('currentSettingsLoader').innerHTML = '<button onclick="loadCurrentSettings(readSettingsFromLocalStorage())">Load settings saved on ' + when.toLocaleDateString() + ' at ' + when.toLocaleTimeString() + '</button> <button onclick="removeLocalStorage();">Erase</button>';
+            } else {
+                document.getElementById('currentSettingsLoader').innerHTML = '';
+            }
+        }
+
+        function ignoreEnter(evt) {
+            if (evt.key === 'Enter') {
+                evt.preventDefault();
+            }
+        }
+
+        function init() {
+            console.log('Initializing page');
+            document.getElementById('form').addEventListener('submit', calculate);
+            localStorageName = window.localStorage && window.localStorage.setItem ? 'blcSettings' : false;
+            //ignore pressing enter in input fields
+            ['layer', 's_z', 's_left', 's_right', 's_front', 's_rear', 'p_lr', 'p_cr', 'p_rr', 'p_lm', 'p_cm', 'p_rm', 'p_lf', 'p_cf', 'p_rf'].forEach(function (id) {
+                document.getElementById(id).addEventListener('keypress', ignoreEnter);
+            });
+            /*
+            //* let's do this in the HTML onblur attribute to help older browsers
+            //recalculate if form is complete (patch fields), but only if form validity is supported:
+            if (document.getElementById('form').checkValidity) {
+                ['p_lr', 'p_cr', 'p_rr', 'p_lm', 'p_cm', 'p_rm', 'p_lf', 'p_cf', 'p_rf'].forEach(function (id) {
+                    document.getElementById(id).addEventListener('blur', calculate);
+                });
+            }
+            */
+            if (localStorageName) {
+                document.getElementById('saveCurrentSettings').innerHTML =
+                    '<button onclick="saveSettingsToLocalStorage(readCurrentSettingsFromForm());">Save current settings to local storage</button>' +
+                    ' <span class="unimportant">(Must be using this browser and load the calculator from ' +
+                    (window.location.hostname || window.location.protocol) + '.)</span>';
+                updateCurrentSettingsLoader();
+            }
+        }
+    </script>
+</head>
+
+<body onload="init()">
+<h1>Bed Level Correction Calculator</h1>
+<p>First, complete the usual first-layer calibration and test to ensure you get adhesion of the first layer.</p>
+<p>Second, get the test patch .stl (or .gcode) from <a href="https://www.thingiverse.com/thing:3008633" target="_blank">
+    https://www.thingiverse.com/thing:3008633</a>. <span
+        class="unimportant"><strong>Not using 0.2mm first layer height?</strong> Not a problem...
+    just use the Customizer (or tweak the openSCAD file) to create a .stl with the correct height.
+    Or if your slicer can do it, scale the Z-axis only in your slicer</span>
+</p>
+<p>Third (unless you the provided .gcode works for you), set your slicer's first-layer height to match the .stl file and
+    slice it using 0 perimeters and 0-degree infill.</p>
+<p>Fourth, fill in the top part of the form with your current settings;</p>
+<p id="currentSettingsLoader"></p>
+<form id="form">
+    <fieldset>
+        <legend>Current settings</legend>
+        <!-- data-pattern attributes had been pattern regexps to help older browsers that don't implement type="number" but that's invalid html5... didn't just delete it in case I figure out a way to use it some day -->
+        <label>(Slicer) First layer height: <input required id="layer" type="number" value="0.20" min="0.05" step="0.05"
+                                                   max="1.00" placeholder="0.20" onfocus="this.select();"
+                                                   onblur="calculate();">
+            mm</label><br>
+        <label>Settings / Live adjust Z:
+            <input required id="s_z" type="number" step="0.001" max="0.000" min="-9.000"
+                   data-pattern="-[0-9]\.[0-9]{2}[0257]" placeholder="-0.100" title="last digit must be 0, 2, 5, or 7"
+                   onfocus="this.select();" onblur="calculate();"> mm</label><br>
+        <label>Calibration / Bed level correct / Left side [&micro;m]:
+            <input required type="number" min="-50" max="50" id="s_left" data-pattern="-?[1-5]?[0-9]" placeholder="0"
+                   value="0" onfocus="this.select();" onblur="calculate();"></label><br>
+        <label>Calibration / Bed level correct / Right side [&micro;m]:
+            <input required type="number" min="-50" max="50" id="s_right" data-pattern="-?[1-5]?[0-9]" placeholder="0"
+                   value="0" onfocus="this.select();" onblur="calculate();"></label><br>
+        <label>Calibration / Bed level correct / Front side [&micro;m]:
+            <input required type="number" min="-50" max="50" id="s_front" data-pattern="-?[1-5]?[0-9]" placeholder="0"
+                   value="0" onfocus="this.select();" onblur="calculate();"></label><br>
+        <label>Calibration / Bed level correct / Rear side [&micro;m]:
+            <input required type="number" min="-50" max="50" id="s_rear" data-pattern="-?[1-5]?[0-9]" placeholder="0"
+                   value="0" onfocus="this.select();" onblur="calculate();"></label><br>
+        <label id="saveCurrentSettings"></label>
+    </fieldset>
+    <p>Fifth, print it and then measure the thickness of the printed patches (photos are on thingiverse):</p>
+    <fieldset>
+        <legend>Measured patches</legend>
+        <table id="patches">
+            <tr>
+                <th>&nbsp;</th>
+                <th scope="col">Left</th>
+                <th scope="col">Center</th>
+                <th scope="col">Right</th>
+            </tr>
+            <tr>
+                <th scope="row">Rear</th>
+                <td><input id="p_lr" type="number" min="0.0100" max="0.800" step="0.001" required placeholder="0.200"
+                           onfocus="this.select();" onblur="calculate();"></td>
+                <td><input id="p_cr" type="number" min="0.0100" max="0.800" step="0.001" required placeholder="0.200"
+                           onfocus="this.select();" onblur="calculate();"></td>
+                <td><input id="p_rr" type="number" min="0.0100" max="0.800" step="0.001" required placeholder="0.200"
+                           onfocus="this.select();" onblur="calculate();"></td>
+            </tr>
+            <tr>
+                <th scope="row">Mid</th>
+                <td><input id="p_lm" type="number" min="0.0100" max="0.800" step="0.001" required placeholder="0.200"
+                           onfocus="this.select();" onblur="calculate();"></td>
+                <td><input id="p_cm" type="number" min="0.0100" max="0.800" step="0.001" required placeholder="0.200"
+                           onfocus="this.select();" onblur="calculate();"></td>
+                <td><input id="p_rm" type="number" min="0.0100" max="0.800" step="0.001" required placeholder="0.200"
+                           onfocus="this.select();" onblur="calculate();"></td>
+            </tr>
+            <tr>
+                <th scope="row">Front</th>
+                <td><input id="p_lf" type="number" min="0.0100" max="0.800" step="0.001" required placeholder="0.200"
+                           onfocus="this.select();" onblur="calculate();"></td>
+                <td><input id="p_cf" type="number" min="0.0100" max="0.800" step="0.001" required placeholder="0.200"
+                           onfocus="this.select();" onblur="calculate();"></td>
+                <td><input id="p_rf" type="number" min="0.0100" max="0.800" step="0.001" required placeholder="0.200"
+                           onfocus="this.select();" onblur="calculate();"></td>
+            </tr>
+        </table>
+    </fieldset>
+    <p class="unimportant">When you exit the last patch (any order), the recommendations should appear, but if you've got an old browser,
+        you may need to click:
+        <input type="submit" value="Calculate Recommended Settings"></p>
+</form>
+<div id="recommendations">
+    <h2>Recommended Settings:</h2>
+    <ul>
+        <li>Settings / Live adjust Z: <span id="r_z"></span></li>
+        <li>Calibration / Bed level correct / Left side [&micro;m]: <span id="r_left"></span></li>
+        <li>Calibration / Bed level correct / Right side [&micro;m]: <span id="r_right"></span></li>
+        <li>Calibration / Bed level correct / Front side [&micro;m]: <span id="r_front"></span></li>
+        <li>Calibration / Bed level correct / Rear side [&micro;m]: <span id="r_rear"></span></li>
+    </ul>
+    <p id="recommendedSettingsInterface"></p>
+    <p>Finally, enter the recommended bed level corrections (and <em>optionally</em> the Live adjust Z) values into
+        your machine. Give it another try and see if the patches come out more even.</p>
+    <p>Your goal in setting the bed level correction is to make the heights of the patches <strong>equal</strong>;
+        they will very likely always measure a little more than the nominal first-layer thickness. Unless you are seeing
+        poor first-layer adhesion or all patches are more than 10% greater than the nominal first-layer height,
+        consider <em>ignoring</em> the suggested Live Adjust Z value. </p>
+    <p>If your extrusion is set correctly, the printer should be extruding
+        enough material to fill the first layer, and it can only go up (and a little bit out), not down into the bed. If
+        you set Live
+        adjust Z too low, the filament will just make ridges alongside the nozzle and you'll be measuring the tops of
+        these ridges which are thicker than your actual gap! Eventually, your nozzle would hit the buildplate and you
+        don't want that.</p>
+    <p>Oh, and please do contact me or comment if you have suggestions for improvement.</p>
+</div>
+<footer>
+    <p>Copyright &copy; 2018, David H. Brown. <a rel="license" href="http://creativecommons.org/licenses/by-nc-sa/4.0/"><img
+            alt="Creative Commons License" style="border-width:0"
+            src="https://i.creativecommons.org/l/by-nc-sa/4.0/88x31.png"/></a><br/>This work is licensed under a <a
+            rel="license" href="http://creativecommons.org/licenses/by-nc-sa/4.0/">Creative Commons
+        Attribution-NonCommercial-ShareAlike 4.0 International License</a>.</p>
+</footer>
+</body>
+</html>
